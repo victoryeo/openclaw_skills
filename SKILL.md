@@ -33,14 +33,7 @@ Scans Mudah.my for new rental property listings specifically on **Penang Island*
 
 Target URL:
 https://www.mudah.my/penang-georgetown/property-for-rent
-
-https://www.mudah.my/penang-bayan-lepas/property-for-rent
-
-https://www.mudah.my/penang-bukit-jambul/property-for-rent
-
-https://www.mudah.my/penang-gelugor/property-for-rent
-
-https://www.mudah.my/penang-sungai-ara/property-for-rent
+... and other specific island URLs to avoid mainland listings.
 
 **Location Filtering (STRICT):**
 
