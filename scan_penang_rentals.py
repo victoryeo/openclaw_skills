@@ -3,8 +3,6 @@
 Daily Penang Rental Property Scanner (9:00 AM)
 Automatically scans Mudah.my for new rental listings in Penang
 and saves results to a JSON file.
-
-Uses Playwright for browser automation.
 """
 
 import asyncio
@@ -19,8 +17,7 @@ from playwright.async_api import async_playwright, TimeoutError as PlaywrightTim
 OUTPUT_FILE = "memory/penang_rentals_{}.json".format(datetime.now().strftime("%Y-%m-%d"))
 LOG_FILE = "memory/rental_scan_log.txt"
 SCAN_URL = "https://www.mudah.my/penang/property-for-rent"
-MAX_RESULTS = 20
-SLEEP_TIME = 3
+MAX_RESULTS = 30
 
 async def log(message):
     """Log messages with timestamp."""
@@ -39,139 +36,182 @@ async def log(message):
         print(f"ERROR writing to log: {e}", file=sys.stderr)
         print(log_entry.strip())
 
-async def extract_listings_from_text(page):
-    """Extract listings by parsing the visible text content."""
-    await log("Extracting listings from page content...")
+async def extract_listings_smart(page):
+    """Intelligently extract listings by analyzing the page structure."""
+    await log("Extracting listings using smart parsing...")
     
-    # Get all text content from the page
+    # Get the entire page content as text
     page_text = await page.evaluate("document.body.innerText")
     
-    # Split into lines and look for property patterns
-    lines = page_text.split('\n')
+    # Split into lines and clean
+    lines = [line.strip() for line in page_text.split('\n') if line.strip()]
     
     listings = []
-    current_listing = {}
+    i = 0
     
-    # Patterns to match
-    price_pattern = r'RM\s*[\d,]+(?:\s*per\s*month)?'
-    size_pattern = r'(\d+(?:\.\d+)?)\s*(?:sq\.?ft|sqft)'
-    bedroom_pattern = r'(\d+)\s*Bedrooms'
-    bathroom_pattern = r'(\d+)\s*Bathrooms'
-    location_pattern = r'(Bayan Lepas|Georgetown|Batu Kawan|Ayer Itam|Jelutong|Bukit Jambul|Tanjung Bungah|Sungai Ara|Seberang Perai|Simpang Ampat)'
+    # Known Penang locations
+    penang_locations = [
+        'Bayan Lepas', 'Georgetown', 'Batu Kawan', 'Ayer Itam', 'Jelutong',
+        'Bukit Jambul', 'Tanjung Bungah', 'Sungai Ara', 'Seberang Perai', 
+        'Simpang Ampat', 'Batu Ferringhi', 'Gelugor', 'Pulau Tikus',
+        'Air Itam', 'Balik Pulau', 'Nibong Tebal', 'Perai', 'Butterworth'
+    ]
     
-    for i, line in enumerate(lines):
-        line = line.strip()
-        if not line:
-            continue
+    while i < len(lines):
+        line = lines[i]
         
         # Look for property type indicators
-        if any(prop_type in line for prop_type in ['Apartment', 'Condominium', 'House', 'Room']):
-            if current_listing and 'title' in current_listing:
-                listings.append(current_listing)
-            current_listing = {'title': line}
+        if any(prop in line for prop in ['Apartment', 'Condominium', 'House', 'Room', 'Property']):
+            listing = {
+                'title': line,
+                'price': 'Price not listed',
+                'location': 'Penang',
+                'size': '',
+                'bedrooms': '',
+                'bathrooms': '',
+                'posted_time': '',
+                'link': ''
+            }
+            
+            # Look ahead for details (next 10 lines)
+            for j in range(i+1, min(i+10, len(lines))):
+                detail = lines[j]
+                
+                # Extract price (RM pattern)
+                if 'RM' in detail and ('per month' in detail or 'month' in detail):
+                    price_match = re.search(r'RM\s*([\d,]+)\s*per\s*month', detail)
+                    if price_match:
+                        listing['price'] = f"RM {price_match.group(1)}/month"
+                    else:
+                        price_match = re.search(r'RM\s*([\d,]+)', detail)
+                        if price_match:
+                            listing['price'] = f"RM {price_match.group(1)}/month"
+                
+                # Extract size
+                elif 'sq.ft.' in detail or 'sqft' in detail:
+                    size_match = re.search(r'(\d+(?:\.\d+)?)\s*sq\.?ft', detail)
+                    if size_match:
+                        listing['size'] = f"{size_match.group(1)} sq.ft"
+                
+                # Extract bedrooms
+                elif 'Bedroom' in detail:
+                    bedroom_match = re.search(r'(\d+)\s*Bedrooms?', detail)
+                    if bedroom_match:
+                        listing['bedrooms'] = f"{bedroom_match.group(1)} beds"
+                    elif 'Studio' in detail:
+                        listing['bedrooms'] = "Studio"
+                
+                # Extract bathrooms
+                elif 'Bathroom' in detail:
+                    bath_match = re.search(r'(\d+)\s*Bathrooms?', detail)
+                    if bath_match:
+                        listing['bathrooms'] = f"{bath_match.group(1)} baths"
+                
+                # Extract location (and posted time at end of line)
+                else:
+                    # Check for location names
+                    for location in penang_locations:
+                        if location in detail:
+                            listing['location'] = location
+                            # Extract posted time if present (format like "Yesterday, 17:45Location" or "Apr 25, 19:57Location")
+                            time_match = re.search(r'(Yesterday|Today|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[\s,0-9:]+', detail)
+                            if time_match:
+                                listing['posted_time'] = time_match.group(0).strip()
+                            break
+            
+            # Only add if we have at least some basic info
+            if listing['title'] and listing['price'] != 'Price not listed' or listing['size'] or listing['bedrooms']:
+                listings.append(listing)
         
-        # Look for price
-        elif 'RM' in line and 'per month' in line:
-            price_match = re.search(price_pattern, line)
-            if price_match and current_listing:
-                current_listing['price'] = price_match.group(0)
-        
-        # Look for size
-        elif 'sq.ft.' in line or 'sqft' in line:
-            size_match = re.search(size_pattern, line)
-            if size_match and current_listing:
-                current_listing['size'] = f"{size_match.group(1)} sq.ft"
-        
-        # Look for bedrooms
-        elif 'Bedrooms' in line:
-            bedroom_match = re.search(bedroom_pattern, line)
-            if bedroom_match and current_listing:
-                current_listing['bedrooms'] = f"{bedroom_match.group(1)} beds"
-        
-        # Look for bathrooms
-        elif 'Bathrooms' in line:
-            bathroom_match = re.search(bathroom_pattern, line)
-            if bathroom_match and current_listing:
-                current_listing['bathrooms'] = f"{bathroom_match.group(1)} baths"
-        
-        # Look for location
-        else:
-            location_match = re.search(location_pattern, line)
-            if location_match and current_listing and 'location' not in current_listing:
-                current_listing['location'] = location_match.group(0)
-    
-    # Add the last listing
-    if current_listing and 'title' in current_listing:
-        listings.append(current_listing)
+        i += 1
     
     return listings
 
-async def extract_listings_direct(page):
-    """Direct extraction from the known HTML structure."""
-    await log("Attempting direct HTML extraction...")
+async def extract_listings_by_structure(page):
+    """Extract listings by finding the actual listing elements in the DOM."""
+    await log("Attempting structure-based extraction...")
     
     listings = []
     
-    # Look for listing containers based on the actual page structure
-    # The page shows listings with clear patterns
+    # Try to find listing containers - based on common patterns
+    # Look for elements that might be listing cards
+    possible_containers = await page.query_selector_all(
+        'div[class*="listing"], div[class*="ad"], div[class*="item"], '
+        'div[class*="card"], li[class*="listing"], article'
+    )
     
-    # Get all elements that might contain listing information
-    possible_listings = await page.query_selector_all('div[class*="listing"], div[class*="ad"], div[class*="item"], a[href*="/item/"]')
-    
-    if not possible_listings:
-        await log("No listing elements found, using text extraction fallback")
-        return await extract_listings_from_text(page)
-    
-    for element in possible_listings[:MAX_RESULTS]:
+    for container in possible_containers:
         try:
-            # Get the text content
-            text = await element.inner_text()
+            # Get all text from this container
+            text = await container.inner_text()
             
-            # Check if this looks like a property listing
-            if not any(keyword in text for keyword in ['RM', 'sq.ft', 'Bedroom', 'Apartment', 'Condominium', 'House']):
+            # Skip if too short or doesn't look like a property listing
+            if len(text) < 50 or not any(keyword in text for keyword in ['RM', 'sq.ft', 'Bedroom']):
                 continue
             
-            # Extract title
-            title = ""
-            for prop_type in ['Apartment', 'Condominium', 'House', 'Room']:
+            listing = {
+                'title': 'Property',
+                'price': 'Price not listed',
+                'location': 'Penang',
+                'size': '',
+                'bedrooms': '',
+                'bathrooms': '',
+                'posted_time': '',
+                'link': ''
+            }
+            
+            # Extract title (look for property type)
+            for prop_type in ['Apartment', 'Condominium', 'House', 'Room', 'Studio']:
                 if prop_type in text:
-                    title = prop_type
+                    listing['title'] = prop_type
                     break
             
             # Extract price
-            price_match = re.search(r'RM\s*([\d,]+)', text)
-            price = f"RM {price_match.group(1)}/month" if price_match else "Price not listed"
+            price_match = re.search(r'RM\s*([\d,]+(?:\s*-\s*[\d,]+)?)\s*(?:per\s*month)?', text)
+            if price_match:
+                listing['price'] = f"RM {price_match.group(1)}/month"
+            
+            # Extract size
+            size_match = re.search(r'(\d+(?:\.\d+)?)\s*sq\.?ft', text)
+            if size_match:
+                listing['size'] = f"{size_match.group(1)} sq.ft"
+            
+            # Extract bedrooms
+            bedroom_match = re.search(r'(\d+)\s*Bedrooms?', text)
+            if bedroom_match:
+                listing['bedrooms'] = f"{bedroom_match.group(1)} beds"
+            
+            # Extract bathrooms  
+            bath_match = re.search(r'(\d+)\s*Bathrooms?', text)
+            if bath_match:
+                listing['bathrooms'] = f"{bath_match.group(1)} baths"
             
             # Extract location
             locations = ['Bayan Lepas', 'Georgetown', 'Batu Kawan', 'Ayer Itam', 'Jelutong', 
                         'Bukit Jambul', 'Tanjung Bungah', 'Sungai Ara', 'Seberang Perai', 'Simpang Ampat']
-            location = next((loc for loc in locations if loc in text), "Penang")
+            for location in locations:
+                if location in text:
+                    listing['location'] = location
+                    break
             
-            # Extract size
-            size_match = re.search(r'(\d+)\s*sq\.?ft', text)
-            size = f"{size_match.group(1)} sq.ft" if size_match else ""
+            # Extract posted time
+            time_match = re.search(r'(Yesterday|Today|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[\s,0-9:]+', text)
+            if time_match:
+                listing['posted_time'] = time_match.group(0).strip()
             
-            # Extract bedrooms
-            bedroom_match = re.search(r'(\d+)\s*Bedrooms', text)
-            bedrooms = f"{bedroom_match.group(1)} beds" if bedroom_match else ""
+            # Try to get link
+            link_elem = await container.query_selector('a[href*="/item/"]')
+            if link_elem:
+                link = await link_elem.get_attribute('href')
+                if link:
+                    listing['link'] = f"https://www.mudah.my{link}" if link.startswith('/') else link
             
-            # Get link if it's an anchor
-            link = await element.get_attribute('href') if await element.get_attribute('href') else ""
-            if link and not link.startswith('http'):
-                link = f"https://www.mudah.my{link}"
+            listings.append(listing)
             
-            listings.append({
-                "title": title or "Property",
-                "price": price,
-                "location": location,
-                "size": size,
-                "bedrooms": bedrooms,
-                "link": link,
-                "scraped_at": datetime.now().isoformat()
-            })
-            
+            if len(listings) >= MAX_RESULTS:
+                break
+                
         except Exception as e:
-            await log(f"Error parsing element: {e}")
             continue
     
     return listings
@@ -197,27 +237,43 @@ async def scan_mudah():
             await log(f"Navigating to {SCAN_URL}")
             await page.goto(SCAN_URL, timeout=30000, wait_until="domcontentloaded")
             
-            # Wait a bit for content to load
-            await asyncio.sleep(3)
+            # Wait for content
+            await asyncio.sleep(5)
             
-            # Get page title to verify we loaded correctly
+            # Get page title
             title = await page.title()
             await log(f"Page title: {title}")
             
-            # Extract listings using the direct method
-            listings = await extract_listings_direct(page)
+            # Try extraction methods
+            listings = await extract_listings_by_structure(page)
             
-            # Save to file
+            if not listings:
+                await log("Structure extraction found nothing, trying smart text parsing...")
+                listings = await extract_listings_smart(page)
+            
+            # Remove duplicates (based on price, size, location combination)
+            unique_listings = []
+            seen = set()
+            for listing in listings:
+                key = f"{listing['price']}_{listing['size']}_{listing['location']}"
+                if key not in seen:
+                    seen.add(key)
+                    unique_listings.append(listing)
+            
+            listings = unique_listings[:MAX_RESULTS]
+            
+            # Save results
             if listings:
                 os.makedirs("memory", exist_ok=True)
                 with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
                     json.dump(listings, f, indent=2, ensure_ascii=False)
-                await log(f"✅ Found {len(listings)} listings. Saved to {OUTPUT_FILE}")
+                await log(f"✅ Found {len(listings)} unique listings. Saved to {OUTPUT_FILE}")
                 
-                # Print summary
-                await log("\n" + "="*60)
-                await log(f"PENANG RENTAL PROPERTIES - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-                await log("="*60)
+                # Print formatted output
+                await log("\n" + "="*70)
+                await log(f"🏠 PENANG RENTAL PROPERTIES - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+                await log("="*70)
+                
                 for i, listing in enumerate(listings, 1):
                     await log(f"\n{i}. {listing['title']}")
                     await log(f"   💰 {listing['price']}")
@@ -226,8 +282,35 @@ async def scan_mudah():
                         await log(f"   📐 {listing['size']}")
                     if listing['bedrooms']:
                         await log(f"   🛏️  {listing['bedrooms']}")
+                    if listing['bathrooms']:
+                        await log(f"   🚿 {listing['bathrooms']}")
+                    if listing['posted_time']:
+                        await log(f"   🕐 Posted: {listing['posted_time']}")
                     if listing['link']:
-                        await log(f"   🔗 {listing['link']}")
+                        await log(f"   🔗 {listing['link'][:80]}...")
+                
+                # Also save as readable text
+                text_file = OUTPUT_FILE.replace('.json', '.txt')
+                with open(text_file, 'w', encoding='utf-8') as f:
+                    f.write(f"Penang Rental Properties - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+                    f.write("="*70 + "\n\n")
+                    for i, listing in enumerate(listings, 1):
+                        f.write(f"{i}. {listing['title']}\n")
+                        f.write(f"   Price: {listing['price']}\n")
+                        f.write(f"   Location: {listing['location']}\n")
+                        if listing['size']:
+                            f.write(f"   Size: {listing['size']}\n")
+                        if listing['bedrooms']:
+                            f.write(f"   Bedrooms: {listing['bedrooms']}\n")
+                        if listing['bathrooms']:
+                            f.write(f"   Bathrooms: {listing['bathrooms']}\n")
+                        if listing['posted_time']:
+                            f.write(f"   Posted: {listing['posted_time']}\n")
+                        if listing['link']:
+                            f.write(f"   Link: {listing['link']}\n")
+                        f.write("\n")
+                
+                await log(f"\n📄 Text summary saved to {text_file}")
             else:
                 await log("⚠️ No listings found. The page structure may have changed.")
                 
