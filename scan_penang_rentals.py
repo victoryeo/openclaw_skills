@@ -28,6 +28,14 @@ def is_on_island(location_text):
     # If any mainland town is in the location string, reject it
     return not any(town.lower() in location_text.lower() for town in mainland_blacklist)
 
+# Known Penang locations
+penang_locations = [
+    'Bayan Lepas', 'Georgetown', 'Ayer Itam', 'Jelutong',
+    'Bukit Jambul', 'Tanjung Bungah', 'Sungai Ara',
+    'Batu Ferringhi', 'Gelugor', 'Pulau Tikus',
+    'Air Itam', 'Balik Pulau', 'Batu Uban'
+]
+
 async def log(message):
     """Log messages with timestamp."""
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -57,14 +65,6 @@ async def extract_listings_smart(page):
     
     listings = []
     i = 0
-    
-    # Known Penang locations
-    penang_locations = [
-        'Bayan Lepas', 'Georgetown', 'Ayer Itam', 'Jelutong',
-        'Bukit Jambul', 'Tanjung Bungah', 'Sungai Ara',
-        'Batu Ferringhi', 'Gelugor', 'Pulau Tikus',
-        'Air Itam', 'Balik Pulau', 'Batu Uban'
-    ]
     
     while i < len(lines):
         line = lines[i]
@@ -199,9 +199,7 @@ async def extract_listings_by_structure(page):
                 listing['bathrooms'] = f"{bath_match.group(1)} baths"
             
             # Extract location
-            locations = ['Bayan Lepas', 'Georgetown', 'Ayer Itam', 'Jelutong', 
-                        'Bukit Jambul', 'Tanjung Bungah', 'Sungai Ara', 'Batu Ferringhi', 'Gelugor', 'Pulau Tikus', 'Air Itam', 'Balik Pulau']
-            for location in locations:
+            for location in penang_locations:
                 if location in text:
                     listing['location'] = location
                     break               
