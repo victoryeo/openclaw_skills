@@ -128,12 +128,13 @@ async def extract_listings_smart(page):
                                 listing['posted_time'] = time_match.group(0).strip()
                             break
             
-            # Only add if we have at least some basic info
+            # FIXED: Moved the island check to AFTER we have the location
+            # Only add if it's on the island (not mainland)
             if is_on_island(listing['location']):
-                print(f"Skipping Mainland property: {listing}")
-                
-            if listing['title'] and listing['price'] != 'Price not listed' or listing['size'] or listing['bedrooms']:
-                listings.append(listing)
+                if listing['title'] and (listing['price'] != 'Price not listed' or listing['size'] or listing['bedrooms']):
+                    listings.append(listing)
+            else:
+                await log(f"  Skipping Mainland property: {listing['location']}")
         
         i += 1
     
@@ -202,7 +203,7 @@ async def extract_listings_by_structure(page):
             for location in penang_locations:
                 if location in text:
                     listing['location'] = location
-                    break               
+                    break
             
             # Extract posted time
             time_match = re.search(r'(Yesterday|Today|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[\s,0-9:]+', text)
@@ -216,13 +217,13 @@ async def extract_listings_by_structure(page):
                 if link:
                     listing['link'] = f"https://www.mudah.my{link}" if link.startswith('/') else link
             
-            loc = listing.locator('span[title]').inner_text()
-            print(f"Extracted location: {loc}")
-            if not is_on_island(loc):
-                print(f"Skipping Mainland property: {loc}")
-                continue
-
-            listings.append(listing)
+            # FIXED: Removed the broken locator line - just use the location we already extracted
+            # Apply island filter - REMOVED the incorrect listing.locator() call
+            if is_on_island(listing['location']):
+                listings.append(listing)
+            else:
+                await log(f"  Skipping Mainland property: {listing['location']}")
+            
             if len(listings) >= MAX_RESULTS:
                 break
                 
