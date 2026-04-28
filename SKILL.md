@@ -9,6 +9,14 @@ description: A skill to scan Mudah.my for rental properties specifically on Pena
 
 ./venv/bin/python scan_penang_properties.py
 
+# Loop through the specific Island URLs to bypass the Mainland entirely
+
+./venv/bin/python scan_penang_properties.py "https://www.mudah.my/penang-georgetown/property-for-rent"
+./venv/bin/python scan_penang_properties.py "https://www.mudah.my/penang-bayan-lepas/property-for-rent"
+./venv/bin/python scan_penang_properties.py "https://www.mudah.my/penang-sungai-ara/property-for-rent"
+./venv/bin/python scan_penang_properties.py "https://www.mudah.my/penang-bukit-jambul/property-for-rent"
+./venv/bin/python scan_penang_properties.py "https://www.mudah.my/penang-gelugor/property-for-rent"
+
 ## Capability
 
 Scans Mudah.my for new rental property listings specifically on **Penang Island**, extracts key information (price, location, size, contact), and saves results to your workspace.
