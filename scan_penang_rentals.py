@@ -19,6 +19,15 @@ LOG_FILE = "memory/rental_scan_log.txt"
 SCAN_URL = "https://www.mudah.my/penang/property-for-rent"
 MAX_RESULTS = 30
 
+mainland_blacklist = [
+    "Batu Kawan", "Bukit Mertajam", "Butterworth", "Simpang Ampat", 
+    "Nibong Tebal", "Seberang Jaya", "Prai", "Juru", "Tambun"
+]
+
+def is_on_island(location_text):
+    # If any mainland town is in the location string, reject it
+    return not any(town.lower() in location_text.lower() for town in mainland_blacklist)
+
 async def log(message):
     """Log messages with timestamp."""
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -51,10 +60,10 @@ async def extract_listings_smart(page):
     
     # Known Penang locations
     penang_locations = [
-        'Bayan Lepas', 'Georgetown', 'Batu Kawan', 'Ayer Itam', 'Jelutong',
-        'Bukit Jambul', 'Tanjung Bungah', 'Sungai Ara', 'Seberang Perai', 
-        'Simpang Ampat', 'Batu Ferringhi', 'Gelugor', 'Pulau Tikus',
-        'Air Itam', 'Balik Pulau', 'Nibong Tebal', 'Perai', 'Butterworth'
+        'Bayan Lepas', 'Georgetown', 'Ayer Itam', 'Jelutong',
+        'Bukit Jambul', 'Tanjung Bungah', 'Sungai Ara',
+        'Batu Ferringhi', 'Gelugor', 'Pulau Tikus',
+        'Air Itam', 'Balik Pulau', 'Batu Uban'
     ]
     
     while i < len(lines):
@@ -120,6 +129,9 @@ async def extract_listings_smart(page):
                             break
             
             # Only add if we have at least some basic info
+            if is_on_island(listing['location']):
+                print(f"Skipping Mainland property: {listing}")
+                
             if listing['title'] and listing['price'] != 'Price not listed' or listing['size'] or listing['bedrooms']:
                 listings.append(listing)
         
@@ -165,7 +177,7 @@ async def extract_listings_by_structure(page):
                 if prop_type in text:
                     listing['title'] = prop_type
                     break
-            
+
             # Extract price
             price_match = re.search(r'RM\s*([\d,]+(?:\s*-\s*[\d,]+)?)\s*(?:per\s*month)?', text)
             if price_match:
@@ -187,12 +199,12 @@ async def extract_listings_by_structure(page):
                 listing['bathrooms'] = f"{bath_match.group(1)} baths"
             
             # Extract location
-            locations = ['Bayan Lepas', 'Georgetown', 'Batu Kawan', 'Ayer Itam', 'Jelutong', 
-                        'Bukit Jambul', 'Tanjung Bungah', 'Sungai Ara', 'Seberang Perai', 'Simpang Ampat']
+            locations = ['Bayan Lepas', 'Georgetown', 'Ayer Itam', 'Jelutong', 
+                        'Bukit Jambul', 'Tanjung Bungah', 'Sungai Ara', 'Batu Ferringhi', 'Gelugor', 'Pulau Tikus', 'Air Itam', 'Balik Pulau']
             for location in locations:
                 if location in text:
                     listing['location'] = location
-                    break
+                    break               
             
             # Extract posted time
             time_match = re.search(r'(Yesterday|Today|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[\s,0-9:]+', text)
@@ -206,8 +218,13 @@ async def extract_listings_by_structure(page):
                 if link:
                     listing['link'] = f"https://www.mudah.my{link}" if link.startswith('/') else link
             
+            loc = listing.locator('span[title]').inner_text()
+            print(f"Extracted location: {loc}")
+            if not is_on_island(loc):
+                print(f"Skipping Mainland property: {loc}")
+                continue
+
             listings.append(listing)
-            
             if len(listings) >= MAX_RESULTS:
                 break
                 
