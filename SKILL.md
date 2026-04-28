@@ -1,17 +1,17 @@
 ---
 name: penang-property-finder
-description: A skill to scan Mudah.my for rental properties in Penang
+description: A skill to scan Mudah.my for rental properties specifically on Penang Island
 ---
 
 # Execution
 
-# This ensures it uses the specific Python environment in your skill folder
+# Executes via the local virtual environment to ensure Playwright dependencies are met
 
 ./venv/bin/python scan_penang_properties.py
 
 ## Capability
 
-Scans Mudah.my for new rental property listings in Penang, extracts key information (price, location, size, contact), and saves results.
+Scans Mudah.my for new rental property listings specifically on **Penang Island**, extracts key information (price, location, size, contact), and saves results to your workspace.
 
 ## Trigger Conditions
 
@@ -23,33 +23,30 @@ Scans Mudah.my for new rental property listings in Penang, extracts key informat
 
 ### Step 1: Define Search Parameters
 
-Target URL: https://www.mudah.my/penang/property-for-rent
+Target URL:
+https://www.mudah.my/penang-georgetown/property-for-rent
 
-Search filters:
+https://www.mudah.my/penang-bayan-lepas/property-for-rent
 
-- Location: Penang (all areas or specific: George Town, Bayan Baru, Batu Ferringhi)
-- Property type: Condominium, Apartment, House
-- Sort by: Latest first
+https://www.mudah.my/penang-bukit-jambul/property-for-rent
 
-### Step 2: Execute Browser Navigation
+https://www.mudah.my/penang-gelugor/property-for-rent
 
-Using `playwright` or `browse` skill:
+https://www.mudah.my/penang-sungai-ara/property-for-rent
 
-```python
-# Pseudocode for automation
-def scan_mudah_rentals(area="Penang", max_results=20):
-    # Navigate to Mudah.my
-    open_browser("https://www.mudah.my/penang/property-for-rent")
+**Location Filtering (STRICT):**
 
-    # Apply filters (if needed)
-    if area != "Penang":
-        select_location_filter(area)
+- **Include:** George Town, Bayan Baru, Bayan Lepas, Tanjung Tokong, Tanjung Bungah, Batu Ferringhi, Jelutong, Air Itam.
+- **Exclude:** All Mainland (Seberang Perai) areas including Bukit Mertajam, Butterworth, Batu Kawan, Seberang Jaya, and Nibong Tebal.
 
-    # Sort by newest
-    click_sort_by("Latest")
+**Filters:**
 
-    # Extract listing data
-    listings = extract_listings(max_results)
+- **Property type:** Condominium, Apartment, House.
+- **Sort by:** Newest/Latest first to catch fresh listings.
 
-    return listings
-```
+### Step 2: Extraction & Contextual Check
+
+1.  Run the automated browser session to fetch the top 10-20 listings.
+2.  **Noise/Sleep Check:** Flag listings in high-density areas (like Batu Uban/E-Park) with a "Noise Warning" based on your sleep history.
+3.  **Bridge Check:** If a listing accidentally includes a mainland address despite filters, discard it immediately.
+4.  Format results into a Markdown table and save the output to the `memory` folder in the current workspace.
