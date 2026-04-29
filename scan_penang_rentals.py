@@ -221,7 +221,47 @@ async def extract_listings_smart(page):
                     if time_match:
                         listing['posted_time'] = time_match.group(0).strip()
             
-            # IMPROVED: Extract location from the full listing text (title + details)
+            # IMPROVED TITLE CAPTURE: Try to find a better title from the full text
+            # Look for property name or specific title in the accumulated text
+            title_candidates = []
+            
+            # Split full text into lines and look for meaningful titles
+            text_lines = full_listing_text.split()
+            
+            # Look for patterns that indicate a proper title (contains property name)
+            title_patterns = [
+                r'([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)\s+(?:Apartment|Condominium|House|Property)',  # "Summer Place Condominium"
+                r'(?:Fully Furnished|Furnished)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)',  # "Fully Furnished Summer Place"
+                r'\[([^\]]+)\]',  # Text in brackets like "[Managed by Property Mart]"
+                r'([A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,3})\s+(?:for\s+Rent|@)',  # "Summer Place for Rent"
+            ]
+            
+            for pattern in title_patterns:
+                match = re.search(pattern, full_listing_text, re.IGNORECASE)
+                if match:
+                    title_candidates.append(match.group(1).strip())
+            
+            # Also check for property names that appear before "Property for Rent"
+            property_match = re.search(r'([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)\s+Property\s+for\s+Rent', full_listing_text, re.IGNORECASE)
+            if property_match:
+                title_candidates.append(property_match.group(1).strip())
+            
+            # If we found a better title, use it
+            if title_candidates:
+                # Take the longest candidate as it's likely the most complete
+                best_title = max(title_candidates, key=len)
+                if len(best_title) > len(listing['title']):
+                    listing['title'] = best_title
+            
+            # If title is still generic, try to extract from the first meaningful line
+            if listing['title'] in ['Apartment', 'Condominium', 'House', 'Room', 'Property', 'Apartment / Condominium']:
+                # Look for a line that contains a property name (capitalized words)
+                for line in text_lines:
+                    if re.match(r'^[A-Z][a-z]+(?:\s+[A-Z][a-z]+)+', line) and len(line) > 10:
+                        listing['title'] = line
+                        break
+            
+            # Extract location from the full listing text
             extracted_location = await extract_location_from_text(full_listing_text)
             if extracted_location:
                 listing['location'] = extracted_location
@@ -277,18 +317,54 @@ async def extract_listings_by_structure(page):
                 'link': ''
             }
             
-            # Extract title (look for property type or get first line)
-            lines = text.split('\n')
-            for line in lines[:5]:  # Check first few lines for title
-                for prop_type in ['Apartment', 'Condominium', 'House', 'Room', 'Studio', 'Condo']:
-                    if prop_type in line:
+            # IMPROVED TITLE CAPTURE: Try multiple methods to get a meaningful title
+            
+            # Method 1: Look for heading elements which usually contain property names
+            title_elements = await container.query_selector_all('h2, h3, h4, strong, b, span[class*="title"]')
+            for title_elem in title_elements:
+                title_text = await title_elem.inner_text()
+                if title_text and len(title_text) > 5 and len(title_text) < 200:
+                    # Skip generic titles
+                    if title_text.lower() not in ['apartment', 'condominium', 'house', 'room', 'property', 'apartment / condominium']:
+                        listing['title'] = title_text.strip()
+                        break
+            
+            # Method 2: If no good title found, look for property name patterns in text
+            if listing['title'] == 'Property':
+                # Look for patterns like "Property Name Apartment" or "Property Name for Rent"
+                title_patterns = [
+                    r'([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)\s+(?:Apartment|Condominium|House|Property)',
+                    r'(?:Fully Furnished|Furnished)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)',
+                    r'\[([^\]]+)\]',  # Text in brackets
+                    r'([A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,3})\s+(?:for\s+Rent|@)',
+                ]
+                
+                for pattern in title_patterns:
+                    match = re.search(pattern, text, re.IGNORECASE)
+                    if match:
+                        potential_title = match.group(1).strip()
+                        if len(potential_title) > 5 and potential_title.lower() not in ['apartment', 'condominium']:
+                            listing['title'] = potential_title
+                            break
+            
+            # Method 3: Use the first line that contains multiple capital words
+            if listing['title'] == 'Property':
+                lines = text.split('\n')
+                for line in lines[:10]:
+                    # Look for line with capital words and not just numbers
+                    if re.search(r'[A-Z][a-z]+(?:\s+[A-Z][a-z]+)+', line) and len(line) > 10:
+                        # Skip if it's just the property type
+                        if not any(prop in line.lower() for prop in ['apartment', 'condominium', 'house', 'room']):
+                            listing['title'] = line.strip()
+                            break
+            
+            # If still no title, use the first non-empty line (original behavior)
+            if listing['title'] == 'Property':
+                lines = text.split('\n')
+                for line in lines[:5]:
+                    if line.strip() and len(line.strip()) > 5:
                         listing['title'] = line.strip()
                         break
-                if listing['title'] != 'Property':
-                    break
-            
-            if listing['title'] == 'Property' and lines:
-                listing['title'] = lines[0].strip()
             
             # Extract price
             price_match = re.search(r'RM\s*([\d,]+(?:\s*-\s*[\d,]+)?)\s*(?:per\s*month)?', text, re.IGNORECASE)
@@ -310,7 +386,7 @@ async def extract_listings_by_structure(page):
             if bath_match:
                 listing['bathrooms'] = f"{bath_match.group(1)} baths"
             
-            # IMPROVED: Extract location using enhanced function
+            # Extract location using enhanced function
             extracted_location = await extract_location_from_text(text)
             if extracted_location:
                 listing['location'] = extracted_location
