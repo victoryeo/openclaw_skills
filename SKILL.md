@@ -7,7 +7,7 @@ description: A skill to scan Mudah.my for rental properties specifically on Pena
 
 # Executes via the local virtual environment to ensure Playwright dependencies are met
 
-./venv/bin/python scan_penang_properties.py
+~/.openclaw/workspace/skills/penang-property-finder/venv/bin/python ~/.openclaw/workspace/skills/penang-property-finder/scan_penang_rentals.py
 
 # Loop through the specific Island URLs to bypass the Mainland entirely
 
@@ -50,4 +50,4 @@ https://www.mudah.my/penang-georgetown/property-for-rent
 1.  Run the automated browser session to fetch the top 10-20 listings.
 2.  **Noise/Sleep Check:** Flag listings in high-density areas (like Batu Uban/E-Park) with a "Noise Warning" based on your sleep history.
 3.  **Bridge Check:** If a listing accidentally includes a mainland address despite filters, discard it immediately.
-4.  Format results into a Markdown table and save the output to the `memory` folder in the current workspace.
+4.  Format results into a Markdown table and save the output to the `memory` folder in the current skill directory.

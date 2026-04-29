@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 Daily Penang Rental Property Scanner (9:00 AM)
 Automatically scans Mudah.my for new rental listings in Penang
