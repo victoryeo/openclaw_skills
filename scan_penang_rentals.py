@@ -40,7 +40,9 @@ LOCATION_URLS = {
 
 mainland_blacklist = [
     "Batu Kawan", "Bukit Mertajam", "Butterworth", "Simpang Ampat", 
-    "Nibong Tebal", "Seberang Jaya", "Prai", "Juru", "Tambun"
+    "Nibong Tebal", "Seberang Jaya", "Prai", "Juru", "Tambun", 
+    "Seberang Perai", "Mainland", "Perai", "Batu Maung", 
+    "Valdor", "Sungai Bakap", "Jawi", "Tasek Gelugor", "Kepala Batas"
 ]
 
 def is_on_island(location_text):
@@ -118,22 +120,27 @@ async def log(message):
         print(f"ERROR writing to log: {e}", file=sys.stderr)
         print(log_entry.strip())
 
+# Improve the location extraction to detect mainland areas
 async def extract_location_from_text(text):
     """Extract specific location from text with improved accuracy."""
     text_lower = text.lower()
     
-    # First try regex patterns
+    # FIRST: Check for mainland areas (to flag them properly)
+    for mainland in mainland_blacklist:
+        if mainland.lower() in text_lower:
+            return mainland  # Return the actual mainland location name
+    
+    # Then try regex patterns for island locations
     for pattern, location_name in location_patterns:
         if re.search(pattern, text, re.IGNORECASE):
             return location_name
     
-    # Then check against known locations list
+    # Then check against known island locations list
     for location in penang_locations:
         if location.lower() in text_lower:
             return location
     
     # Check for area names in title (often contains area)
-    # Common patterns like "at [Area]", "in [Area]", "[Area] area"
     area_match = re.search(r'(?:at|in|@)\s+([A-Za-z\s]+?)(?:\s+area|\s+penang|$)', text, re.IGNORECASE)
     if area_match:
         potential_area = area_match.group(1).strip()
@@ -141,12 +148,7 @@ async def extract_location_from_text(text):
             if location.lower() in potential_area.lower():
                 return location
     
-    # Check if title contains area name (e.g., "Paya Terubong Majestic Heights")
-    for location in penang_locations:
-        if location.lower() in text_lower:
-            return location
-    
-    return None  # Return None if no specific location found
+    return None
 
 async def extract_listings_smart(page):
     """Intelligently extract listings by analyzing the page structure."""
@@ -261,8 +263,78 @@ async def extract_listings_smart(page):
                         listing['title'] = line
                         break
             
-            # Extract location from the full listing text
-            extracted_location = await extract_location_from_text(full_listing_text)
+            # IMPROVED LOCATION CAPTURE: Multiple strategies to find location
+            extracted_location = None
+            
+            # Strategy 1: Check the posted_time line which often contains location
+            if listing['posted_time']:
+                # The location is often directly after the time without space
+                # e.g., "Apr 12, 23:45Bayan Lepas" or "Yesterday, 14:41Bukit Jambul"
+                time_line = listing['posted_time']
+                # Find what comes after the time
+                for line in lines[i:i+15]:
+                    if time_line in line:
+                        # Extract everything after the time
+                        location_part = line.split(time_line)[-1].strip()
+                        if location_part:
+                            extracted_location = await extract_location_from_text(location_part)
+                            if extracted_location:
+                                break
+            
+            # Strategy 2: Look for location in the lines following the property type
+            if not extracted_location:
+                for j in range(i+1, min(i+12, len(lines))):
+                    detail = lines[j]
+                    # Check if this line contains a location (usually after posted time)
+                    if any(month in detail for month in ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec', 'Yesterday', 'Today']):
+                        # Try to extract location from this line
+                        for location in penang_locations:
+                            if location.lower() in detail.lower():
+                                extracted_location = location
+                                break
+                        if extracted_location:
+                            break
+                    
+                    # Also check if the detail line itself is a location (just the name)
+                    for location in penang_locations:
+                        if detail.lower() == location.lower() or detail.lower().startswith(location.lower()):
+                            extracted_location = location
+                            break
+                    if extracted_location:
+                        break
+            
+            # Strategy 3: Check for "📍" or location markers in the text
+            if not extracted_location:
+                location_markers = ['📍', 'Location:', 'Area:', 'in ', 'at ']
+                for marker in location_markers:
+                    if marker in full_listing_text:
+                        # Find text after marker
+                        marker_pos = full_listing_text.find(marker)
+                        if marker_pos != -1:
+                            after_marker = full_listing_text[marker_pos + len(marker):]
+                            # Take next 30 characters or until newline
+                            potential_location = after_marker[:50].split()[0] if after_marker else ""
+                            extracted_location = await extract_location_from_text(potential_location)
+                            if extracted_location:
+                                break
+            
+            # Strategy 4: Look for location near the end of the listing text
+            if not extracted_location:
+                # Get last 200 characters of the listing (where location often appears)
+                last_part = full_listing_text[-200:] if len(full_listing_text) > 200 else full_listing_text
+                for location in penang_locations:
+                    if location.lower() in last_part.lower():
+                        extracted_location = location
+                        break
+            
+            # Strategy 5: Check the original title for location
+            if not extracted_location:
+                extracted_location = await extract_location_from_text(listing['title'])
+            
+            # Strategy 6: Fallback to the generic extractor
+            if not extracted_location:
+                extracted_location = await extract_location_from_text(full_listing_text)
+            
             if extracted_location:
                 listing['location'] = extracted_location
             else:
@@ -279,6 +351,7 @@ async def extract_listings_smart(page):
                     await log(f"  ✓ Added: {listing['title'][:50]}... at {listing['location']}")
             else:
                 await log(f"  ✗ Skipping Mainland property: {listing['location']}")
+                continue
         
         i += 1
     
@@ -386,8 +459,41 @@ async def extract_listings_by_structure(page):
             if bath_match:
                 listing['bathrooms'] = f"{bath_match.group(1)} baths"
             
-            # Extract location using enhanced function
-            extracted_location = await extract_location_from_text(text)
+            # Extract posted time
+            time_match = re.search(r'(Yesterday|Today|Just now|\d+ hours ago|\d+ days ago|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[\s,0-9:]+', text, re.IGNORECASE)
+            if time_match:
+                listing['posted_time'] = time_match.group(0).strip()
+            
+            # IMPROVED LOCATION CAPTURE for structure extraction
+            extracted_location = None
+            
+            # Look for location in the posted time line
+            if listing['posted_time']:
+                # Find the line containing the posted time
+                lines = text.split('\n')
+                for line in lines:
+                    if listing['posted_time'] in line:
+                        # Extract everything after the time
+                        location_part = line.split(listing['posted_time'])[-1].strip()
+                        if location_part:
+                            extracted_location = await extract_location_from_text(location_part)
+                            break
+            
+            # If not found, check lines following the posted time
+            if not extracted_location:
+                lines = text.split('\n')
+                for idx, line in enumerate(lines):
+                    if listing['posted_time'] in line and idx + 1 < len(lines):
+                        # Check next line for location
+                        next_line = lines[idx + 1].strip()
+                        extracted_location = await extract_location_from_text(next_line)
+                        if extracted_location:
+                            break
+            
+            # If still not found, use the generic extraction
+            if not extracted_location:
+                extracted_location = await extract_location_from_text(text)
+            
             if extracted_location:
                 listing['location'] = extracted_location
             else:
@@ -396,11 +502,6 @@ async def extract_listings_by_structure(page):
                     if location.lower() in text.lower():
                         listing['location'] = location
                         break
-            
-            # Extract posted time
-            time_match = re.search(r'(Yesterday|Today|Just now|\d+ hours ago|\d+ days ago|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[\s,0-9:]+', text, re.IGNORECASE)
-            if time_match:
-                listing['posted_time'] = time_match.group(0).strip()
             
             # Try to get link
             link_elem = await container.query_selector('a[href*="/item/"]')
@@ -415,6 +516,7 @@ async def extract_listings_by_structure(page):
                 await log(f"  ✓ Added structure listing: {listing['title'][:50]}... at {listing['location']}")
             else:
                 await log(f"  ✗ Skipping Mainland property: {listing['location']}")
+                continue
             
             if len(listings) >= MAX_RESULTS:
                 break
