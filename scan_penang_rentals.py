@@ -526,16 +526,127 @@ async def extract_listings_by_structure(page):
     
     return listings
 
-async def scan_mudah():
-    """Main scanning function."""
-    # ADDED: Parse arguments at the start
-    args = parse_arguments()
+async def find_and_click_next(page):
+    """Find and click next button on Mudah.my with better error handling."""
     
-    # ADDED: Get URL based on location argument
+    # Strategy 1: Look for standard next button selectors
+    next_selectors = [
+        'a[rel="next"]',
+        'a:has-text("Next")',
+        'button:has-text("Next")',
+        'a:has-text("›")',
+        'a:has-text("»")',
+        'li.next a',
+        '.pagination .next a',
+        'a[aria-label="Next"]',
+        'div[class*="pagination"] a:last-child',
+        'ul[class*="pagination"] li:last-child a',
+        'a[data-role="next"]',
+        'span:has-text("Next")',  # Some sites use span
+        'div[class*="next"] a',
+        'button[class*="next"]'
+    ]
+    
+    for selector in next_selectors:
+        try:
+            next_button = await page.query_selector(selector)
+            if next_button:
+                # Check if button is visible
+                is_visible = await next_button.is_visible()
+                if not is_visible:
+                    await log(f"  Found {selector} but not visible")
+                    continue
+                
+                # Check if button is disabled
+                is_disabled = await next_button.get_attribute('disabled')
+                if is_disabled:
+                    await log(f"  Found {selector} but disabled")
+                    continue
+                
+                # Check if button has 'aria-disabled'
+                aria_disabled = await next_button.get_attribute('aria-disabled')
+                if aria_disabled == 'true':
+                    await log(f"  Found {selector} but aria-disabled")
+                    continue
+                
+                await log(f"  ✓ Clicking next button: {selector}")
+                
+                # Try to click with JavaScript if regular click fails
+                try:
+                    await next_button.click()
+                except:
+                    await page.evaluate("arguments[0].click();", next_button)
+                
+                # Wait for navigation
+                await page.wait_for_load_state('networkidle', timeout=10000)
+                await asyncio.sleep(2)
+                
+                # Verify we're on a new page (check if URL changed or content changed)
+                return True
+                
+        except Exception as e:
+            await log(f"  Error with selector {selector}: {str(e)[:50]}")
+            continue
+    
+    # Strategy 2: Look for page numbers and click the next number
+    try:
+        # Find all pagination links
+        pagination_links = await page.query_selector_all('div[class*="pagination"] a, ul[class*="pagination"] a')
+        
+        current_page = None
+        
+        # Find current page (usually highlighted)
+        for link in pagination_links:
+            class_name = await link.get_attribute('class')
+            if class_name and ('active' in class_name or 'current' in class_name):
+                page_text = await link.inner_text()
+                if page_text.strip().isdigit():
+                    current_page = int(page_text.strip())
+                    break
+        
+        # If found current page, look for next page number
+        if current_page:
+            next_page_num = current_page + 1
+            for link in pagination_links:
+                link_text = await link.inner_text()
+                if link_text.strip() == str(next_page_num):
+                    await log(f"  ✓ Clicking page {next_page_num} link")
+                    await link.click()
+                    await page.wait_for_load_state('networkidle', timeout=10000)
+                    await asyncio.sleep(2)
+                    return True
+    except Exception as e:
+        await log(f"  Page number detection failed: {str(e)[:50]}")
+    
+    # Strategy 3: Look for pagination container and extract the next page URL directly
+    try:
+        # Look for any pagination container
+        pagination = await page.query_selector('div[class*="pagination"], ul[class*="pagination"]')
+        if pagination:
+            # Find all links in pagination
+            links = await pagination.query_selector_all('a')
+            for link in links:
+                link_text = await link.inner_text()
+                if 'next' in link_text.lower() or '›' in link_text or '»' in link_text:
+                    href = await link.get_attribute('href')
+                    if href:
+                        await log(f"  ✓ Direct navigation to: {href}")
+                        await page.goto(href, wait_until="networkidle")
+                        await asyncio.sleep(2)
+                        return True
+    except Exception as e:
+        pass
+    
+    return False
+
+
+async def scan_mudah():
+    """Main scanning function with improved pagination."""
+    args = parse_arguments()
     scan_url = get_scan_url(args.location)
     
     await log("Starting Mudah.my Penang rental scan...")
-    await log(f"📍 Target URL: {scan_url}")  # ADDED: Log which URL we're using
+    await log(f"📍 Target URL: {scan_url}")
     
     async with async_playwright() as p:
         browser = await p.chromium.launch(
@@ -551,97 +662,147 @@ async def scan_mudah():
         page = await context.new_page()
         
         try:
-            # CHANGED: Use scan_url instead of SCAN_URL
-            await log(f"Navigating to {scan_url}")
-            await page.goto(scan_url, timeout=30000, wait_until="domcontentloaded")
+            all_island_listings = []
+            current_page_num = 1
+            max_pages = 5
             
-            # Wait for content
-            await asyncio.sleep(5)
+            while current_page_num <= max_pages:
+                await log(f"\n{'='*50}")
+                await log(f"📄 Scanning page {current_page_num}")
+                await log(f"{'='*50}")
+                
+                if current_page_num == 1:
+                    await log(f"Navigating to {scan_url}")
+                    await page.goto(scan_url, timeout=30000, wait_until="domcontentloaded")
+                    await asyncio.sleep(3)
+                else:
+                    await log("Looking for next page button...")
+                    next_found = await find_and_click_next(page)
+                    if not next_found:
+                        await log("  ❌ No next page button found, stopping pagination")
+                        break
+                    await log("  ✅ Successfully navigated to next page")
+                
+                # Scroll to load dynamic content
+                await log("Scrolling to load all listings...")
+                for scroll in range(3):
+                    await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                    await asyncio.sleep(2)
+                
+                # Extract listings
+                page_listings = await extract_listings_by_structure(page)
+                
+                if not page_listings:
+                    page_listings = await extract_listings_smart(page)
+                
+                if not page_listings:
+                    page_text = await page.evaluate("document.body.innerText")
+                    page_listings = await extract_listings_from_text_fallback(page_text)
+                
+                # Filter to island only
+                island_on_page = []
+                mainland_on_page = []
+                
+                for listing in page_listings:
+                    if is_on_island(listing['location']):
+                        island_on_page.append(listing)
+                    else:
+                        mainland_on_page.append(listing)
+                
+                # Add new listings (avoid duplicates)
+                for listing in island_on_page:
+                    # Check if already exists
+                    exists = False
+                    for existing in all_island_listings:
+                        if (existing['title'] == listing['title'] and 
+                            existing['price'] == listing['price'] and 
+                            existing['location'] == listing['location']):
+                            exists = True
+                            break
+                    if not exists:
+                        all_island_listings.append(listing)
+                
+                await log(f"\n  Page {current_page_num} results:")
+                await log(f"    - New island listings on this page: {len(island_on_page)}")
+                await log(f"    - Total unique island listings: {len(all_island_listings)}")
+                await log(f"    - Mainland filtered: {len(mainland_on_page)}")
+                
+                if mainland_on_page:
+                    mainland_areas = list(set([l['location'] for l in mainland_on_page[:5]]))
+                    await log(f"    - Mainland areas: {', '.join(mainland_areas)}")
+                
+                # Check if we have enough
+                if len(all_island_listings) >= MAX_RESULTS:
+                    await log(f"\n✅ Reached target of {MAX_RESULTS} island listings!")
+                    break
+                
+                current_page_num += 1
             
-            # Get page title
-            title = await page.title()
-            await log(f"Page title: {title}")
+            # Sort by recency
+            all_island_listings.sort(key=lambda x: x.get('posted_time', ''), reverse=True)
+            listings = all_island_listings[:MAX_RESULTS]
             
-            # Try extraction methods
-            listings = await extract_listings_by_structure(page)
-            
-            if not listings:
-                await log("Structure extraction found nothing, trying smart text parsing...")
-                listings = await extract_listings_smart(page)
-            
-            # Remove duplicates (based on price, size, location combination)
-            unique_listings = []
-            seen = set()
-            for listing in listings:
-                key = f"{listing['price']}_{listing['size']}_{listing['location']}"
-                if key not in seen:
-                    seen.add(key)
-                    unique_listings.append(listing)
-            
-            listings = unique_listings[:MAX_RESULTS]
-            
-            # Save results
+            # Save results (same as before)
             if listings:
                 os.makedirs(os.path.join(SKILL_DIR, "memory"), exist_ok=True)
                 with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
                     json.dump(listings, f, indent=2, ensure_ascii=False)
-                await log(f"✅ Found {len(listings)} unique listings. Saved to {OUTPUT_FILE}")
+                
+                await log(f"\n{'='*70}")
+                await log(f"✅ SCAN COMPLETE")
+                await log(f"{'='*70}")
+                await log(f"📊 Final Summary:")
+                await log(f"   - Pages scanned: {current_page_num}")
+                await log(f"   - Total unique island listings: {len(all_island_listings)}")
+                await log(f"   - Displaying: {len(listings)} listings")
+                await log(f"💾 Saved to: {OUTPUT_FILE}")
+                await log(f"{'='*70}")
                 
                 # Print formatted output
-                await log("\n" + "="*70)
-                await log(f"🏠 PENANG RENTAL PROPERTIES - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+                await log(f"\n🏠 PENANG RENTAL PROPERTIES - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
                 await log("="*70)
                 
                 for i, listing in enumerate(listings, 1):
-                    await log(f"\n{i}. {listing['title']}")
+                    await log(f"\n{i}. {listing['title'][:80]}")
                     await log(f"   💰 {listing['price']}")
                     await log(f"   📍 {listing['location']}")
-                    if listing['size']:
+                    if listing.get('size'):
                         await log(f"   📐 {listing['size']}")
-                    if listing['bedrooms']:
+                    if listing.get('bedrooms'):
                         await log(f"   🛏️  {listing['bedrooms']}")
-                    if listing['bathrooms']:
+                    if listing.get('bathrooms'):
                         await log(f"   🚿 {listing['bathrooms']}")
-                    if listing['posted_time']:
+                    if listing.get('posted_time'):
                         await log(f"   🕐 Posted: {listing['posted_time']}")
-                    if listing['link']:
-                        await log(f"   🔗 {listing['link'][:80]}...")
                 
-                # Also save as readable text
+                # Save text file
                 text_file = OUTPUT_FILE.replace('.json', '.txt')
                 with open(text_file, 'w', encoding='utf-8') as f:
                     f.write(f"Penang Rental Properties - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-                    f.write(f"URL: {scan_url}\n")  # ADDED: Include URL in text output
+                    f.write(f"URL: {scan_url}\n")
+                    f.write(f"Pages scanned: {current_page_num}\n")
+                    f.write(f"Total island listings: {len(all_island_listings)}\n")
                     f.write("="*70 + "\n\n")
                     for i, listing in enumerate(listings, 1):
                         f.write(f"{i}. {listing['title']}\n")
                         f.write(f"   Price: {listing['price']}\n")
                         f.write(f"   Location: {listing['location']}\n")
-                        if listing['size']:
+                        if listing.get('size'):
                             f.write(f"   Size: {listing['size']}\n")
-                        if listing['bedrooms']:
+                        if listing.get('bedrooms'):
                             f.write(f"   Bedrooms: {listing['bedrooms']}\n")
-                        if listing['bathrooms']:
+                        if listing.get('bathrooms'):
                             f.write(f"   Bathrooms: {listing['bathrooms']}\n")
-                        if listing['posted_time']:
+                        if listing.get('posted_time'):
                             f.write(f"   Posted: {listing['posted_time']}\n")
-                        if listing['link']:
-                            f.write(f"   Link: {listing['link']}\n")
                         f.write("\n")
                 
                 await log(f"\n📄 Text summary saved to {text_file}")
-            else:
-                await log("⚠️ No listings found. The page structure may have changed.")
-                
-                # Save page source for debugging
-                with open(os.path.join(SKILL_DIR, "memory/debug_page_source.html"), "w", encoding="utf-8") as f:
-                    f.write(await page.content())
-                await log("📄 Page source saved to memory/debug_page_source.html")
             
             # Take screenshot
             screenshot_path = os.path.join(SKILL_DIR, f"memory/penang_rentals_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png")
             await page.screenshot(path=screenshot_path, full_page=False)
-            await log(f"📸 Screenshot saved to {screenshot_path}")
+            await log(f"\n📸 Screenshot saved to {screenshot_path}")
             
         except Exception as e:
             await log(f"❌ Scan failed: {e}")
@@ -652,6 +813,69 @@ async def scan_mudah():
             await browser.close()
     
     await log("Scan completed.")
+
+async def extract_listings_from_text_fallback(page_text):
+    """Fallback method to extract listings from raw text."""
+    listings = []
+    lines = [line.strip() for line in page_text.split('\n') if line.strip()]
+    
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        
+        # Look for property indicators
+        if any(prop in line for prop in ['Apartment', 'Condominium', 'House', 'Room', 'Property']):
+            listing = {
+                'title': line,
+                'price': 'Price not listed',
+                'location': 'Penang',
+                'size': '',
+                'bedrooms': '',
+                'bathrooms': '',
+                'posted_time': '',
+                'link': ''
+            }
+            
+            # Look ahead for details
+            for j in range(i+1, min(i+10, len(lines))):
+                detail = lines[j]
+                
+                if 'RM' in detail:
+                    price_match = re.search(r'RM\s*([\d,]+)', detail)
+                    if price_match:
+                        listing['price'] = f"RM {price_match.group(1)}/month"
+                
+                if 'sq.ft' in detail:
+                    size_match = re.search(r'(\d+)\s*sq\.?ft', detail)
+                    if size_match:
+                        listing['size'] = f"{size_match.group(1)} sq.ft"
+                
+                if 'Bedroom' in detail:
+                    bedroom_match = re.search(r'(\d+)\s*Bedrooms?', detail)
+                    if bedroom_match:
+                        listing['bedrooms'] = f"{bedroom_match.group(1)} beds"
+                
+                if 'Bathroom' in detail:
+                    bath_match = re.search(r'(\d+)\s*Bathrooms?', detail)
+                    if bath_match:
+                        listing['bathrooms'] = f"{bath_match.group(1)} baths"
+                
+                # Extract location from posted time line
+                time_match = re.search(r'(Yesterday|Today|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[\s,0-9:]+([A-Za-z\s]+)', detail)
+                if time_match:
+                    listing['posted_time'] = time_match.group(0).strip()
+                    location_part = time_match.group(2).strip()
+                    for loc in penang_locations:
+                        if loc.lower() in location_part.lower():
+                            listing['location'] = loc
+                            break
+            
+            if listing['title'] and (listing['price'] != 'Price not listed' or listing['size']):
+                listings.append(listing)
+        
+        i += 1
+    
+    return listings
 
 if __name__ == "__main__":
     asyncio.run(scan_mudah())
