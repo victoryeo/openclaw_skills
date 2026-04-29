@@ -13,9 +13,12 @@ import re
 from datetime import datetime
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
 
+# Get the absolute path of the folder where this script is located
+SKILL_DIR = os.path.dirname(os.path.abspath(__file__))
+
 # Configuration
-OUTPUT_FILE = "memory/penang_rentals_{}.json".format(datetime.now().strftime("%Y-%m-%d"))
-LOG_FILE = "memory/rental_scan_log.txt"
+OUTPUT_FILE = os.path.join(SKILL_DIR, "memory/penang_rentals_{}.json".format(datetime.now().strftime("%Y-%m-%d")))
+LOG_FILE = os.path.join(SKILL_DIR, "memory/rental_scan_log.txt")
 SCAN_URL = "https://www.mudah.my/penang/property-for-rent"
 MAX_RESULTS = 30
 
@@ -280,7 +283,7 @@ async def scan_mudah():
             
             # Save results
             if listings:
-                os.makedirs("memory", exist_ok=True)
+                os.makedirs(os.path.join(SKILL_DIR, "memory"), exist_ok=True)
                 with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
                     json.dump(listings, f, indent=2, ensure_ascii=False)
                 await log(f"✅ Found {len(listings)} unique listings. Saved to {OUTPUT_FILE}")
@@ -331,12 +334,12 @@ async def scan_mudah():
                 await log("⚠️ No listings found. The page structure may have changed.")
                 
                 # Save page source for debugging
-                with open("memory/debug_page_source.html", "w", encoding="utf-8") as f:
+                with open(os.path.join(SKILL_DIR, "memory/debug_page_source.html"), "w", encoding="utf-8") as f:
                     f.write(await page.content())
                 await log("📄 Page source saved to memory/debug_page_source.html")
             
             # Take screenshot
-            screenshot_path = f"memory/penang_rentals_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
+            screenshot_path = os.path.join(SKILL_DIR, f"memory/penang_rentals_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png")
             await page.screenshot(path=screenshot_path, full_page=False)
             await log(f"📸 Screenshot saved to {screenshot_path}")
             
