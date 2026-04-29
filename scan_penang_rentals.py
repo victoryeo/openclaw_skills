@@ -47,12 +47,33 @@ def is_on_island(location_text):
     # If any mainland town is in the location string, reject it
     return not any(town.lower() in location_text.lower() for town in mainland_blacklist)
 
-# Known Penang locations
+# Enhanced Penang locations with variations
 penang_locations = [
-    'Bayan Lepas', 'Georgetown', 'Ayer Itam', 'Jelutong',
-    'Bukit Jambul', 'Tanjung Bungah', 'Sungai Ara',
-    'Batu Ferringhi', 'Gelugor', 'Pulau Tikus',
-    'Air Itam', 'Balik Pulau', 'Batu Uban'
+    'Georgetown', 'George Town', 'Bayan Lepas', 'Bayan Baru', 'Sungai Ara',
+    'Bukit Jambul', 'Jelutong', 'Tanjung Bungah', 'Tanjung Tokong', 
+    'Batu Ferringhi', 'Gelugor', 'Pulau Tikus', 'Air Itam', 'Ayer Itam',
+    'Balik Pulau', 'Batu Uban', 'Green Lane', 'Jalan Masjid Negeri',
+    'Paya Terubong', 'Relau', 'Farlim', 'Bandar Baru Air Itam',
+    'Mount Erskine', 'Scotland Road', 'Macalister Road', 'Burmah Road'
+]
+
+# Add location patterns to look for (including partial matches)
+location_patterns = [
+    (r'(Georgetown|George Town|GTown)', 'Georgetown'),
+    (r'(Bayan Lepas|Bayan Lepas area|Airport area)', 'Bayan Lepas'),
+    (r'(Sungai Ara|Ara)', 'Sungai Ara'),
+    (r'(Bukit Jambul|BJ)', 'Bukit Jambul'),
+    (r'(Jelutong)', 'Jelutong'),
+    (r'(Tanjung Bungah|TB|Tg Bungah)', 'Tanjung Bungah'),
+    (r'(Tanjung Tokong|Tg Tokong)', 'Tanjung Tokong'),
+    (r'(Batu Ferringhi|Ferringhi)', 'Batu Ferringhi'),
+    (r'(Gelugor)', 'Gelugor'),
+    (r'(Pulau Tikus)', 'Pulau Tikus'),
+    (r'(Air Itam|Ayer Itam)', 'Air Itam'),
+    (r'(Paya Terubong|Terubong)', 'Paya Terubong'),
+    (r'(Relau)', 'Relau'),
+    (r'(Farlim)', 'Farlim'),
+    (r'(Green Lane|Jalan Masjid Negeri)', 'Green Lane'),
 ]
 
 # Parse command line arguments
@@ -97,6 +118,36 @@ async def log(message):
         print(f"ERROR writing to log: {e}", file=sys.stderr)
         print(log_entry.strip())
 
+async def extract_location_from_text(text):
+    """Extract specific location from text with improved accuracy."""
+    text_lower = text.lower()
+    
+    # First try regex patterns
+    for pattern, location_name in location_patterns:
+        if re.search(pattern, text, re.IGNORECASE):
+            return location_name
+    
+    # Then check against known locations list
+    for location in penang_locations:
+        if location.lower() in text_lower:
+            return location
+    
+    # Check for area names in title (often contains area)
+    # Common patterns like "at [Area]", "in [Area]", "[Area] area"
+    area_match = re.search(r'(?:at|in|@)\s+([A-Za-z\s]+?)(?:\s+area|\s+penang|$)', text, re.IGNORECASE)
+    if area_match:
+        potential_area = area_match.group(1).strip()
+        for location in penang_locations:
+            if location.lower() in potential_area.lower():
+                return location
+    
+    # Check if title contains area name (e.g., "Paya Terubong Majestic Heights")
+    for location in penang_locations:
+        if location.lower() in text_lower:
+            return location
+    
+    return None  # Return None if no specific location found
+
 async def extract_listings_smart(page):
     """Intelligently extract listings by analyzing the page structure."""
     await log("Extracting listings using smart parsing...")
@@ -114,11 +165,11 @@ async def extract_listings_smart(page):
         line = lines[i]
         
         # Look for property type indicators
-        if any(prop in line for prop in ['Apartment', 'Condominium', 'House', 'Room', 'Property']):
+        if any(prop in line for prop in ['Apartment', 'Condominium', 'House', 'Room', 'Property', 'Studio']):
             listing = {
                 'title': line,
                 'price': 'Price not listed',
-                'location': 'Penang',
+                'location': 'Penang',  # Default
                 'size': '',
                 'bedrooms': '',
                 'bathrooms': '',
@@ -126,9 +177,13 @@ async def extract_listings_smart(page):
                 'link': ''
             }
             
-            # Look ahead for details (next 10 lines)
-            for j in range(i+1, min(i+10, len(lines))):
+            # Store the full text of this listing for better location extraction
+            full_listing_text = line
+            
+            # Look ahead for details (next 15 lines instead of 10 for more context)
+            for j in range(i+1, min(i+15, len(lines))):
                 detail = lines[j]
+                full_listing_text += " " + detail
                 
                 # Extract price (RM pattern)
                 if 'RM' in detail and ('per month' in detail or 'month' in detail):
@@ -141,44 +196,49 @@ async def extract_listings_smart(page):
                             listing['price'] = f"RM {price_match.group(1)}/month"
                 
                 # Extract size
-                elif 'sq.ft.' in detail or 'sqft' in detail:
+                elif 'sq.ft.' in detail or 'sqft' in detail or 'sq ft' in detail:
                     size_match = re.search(r'(\d+(?:\.\d+)?)\s*sq\.?ft', detail)
                     if size_match:
                         listing['size'] = f"{size_match.group(1)} sq.ft"
                 
                 # Extract bedrooms
-                elif 'Bedroom' in detail:
-                    bedroom_match = re.search(r'(\d+)\s*Bedrooms?', detail)
+                elif 'Bedroom' in detail or 'bedroom' in detail.lower():
+                    bedroom_match = re.search(r'(\d+)\s*Bedrooms?', detail, re.IGNORECASE)
                     if bedroom_match:
                         listing['bedrooms'] = f"{bedroom_match.group(1)} beds"
                     elif 'Studio' in detail:
                         listing['bedrooms'] = "Studio"
                 
                 # Extract bathrooms
-                elif 'Bathroom' in detail:
-                    bath_match = re.search(r'(\d+)\s*Bathrooms?', detail)
+                elif 'Bathroom' in detail or 'bathroom' in detail.lower():
+                    bath_match = re.search(r'(\d+)\s*Bathrooms?', detail, re.IGNORECASE)
                     if bath_match:
                         listing['bathrooms'] = f"{bath_match.group(1)} baths"
                 
-                # Extract location (and posted time at end of line)
-                else:
-                    # Check for location names
-                    for location in penang_locations:
-                        if location in detail:
-                            listing['location'] = location
-                            # Extract posted time if present (format like "Yesterday, 17:45Location" or "Apr 25, 19:57Location")
-                            time_match = re.search(r'(Yesterday|Today|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[\s,0-9:]+', detail)
-                            if time_match:
-                                listing['posted_time'] = time_match.group(0).strip()
-                            break
+                # Extract posted time
+                elif 'Posted' in detail or 'yesterday' in detail.lower() or 'today' in detail.lower():
+                    time_match = re.search(r'(Yesterday|Today|Just now|\d+ hours ago|\d+ days ago|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[\s,0-9:]+', detail, re.IGNORECASE)
+                    if time_match:
+                        listing['posted_time'] = time_match.group(0).strip()
             
-            # FIXED: Moved the island check to AFTER we have the location
+            # IMPROVED: Extract location from the full listing text (title + details)
+            extracted_location = await extract_location_from_text(full_listing_text)
+            if extracted_location:
+                listing['location'] = extracted_location
+            else:
+                # Try to extract from title specifically
+                for location in penang_locations:
+                    if location.lower() in listing['title'].lower():
+                        listing['location'] = location
+                        break
+            
             # Only add if it's on the island (not mainland)
             if is_on_island(listing['location']):
                 if listing['title'] and (listing['price'] != 'Price not listed' or listing['size'] or listing['bedrooms']):
                     listings.append(listing)
+                    await log(f"  ✓ Added: {listing['title'][:50]}... at {listing['location']}")
             else:
-                await log(f"  Skipping Mainland property: {listing['location']}")
+                await log(f"  ✗ Skipping Mainland property: {listing['location']}")
         
         i += 1
     
@@ -190,11 +250,11 @@ async def extract_listings_by_structure(page):
     
     listings = []
     
-    # Try to find listing containers - based on common patterns
-    # Look for elements that might be listing cards
+    # Try to find listing containers
     possible_containers = await page.query_selector_all(
         'div[class*="listing"], div[class*="ad"], div[class*="item"], '
-        'div[class*="card"], li[class*="listing"], article'
+        'div[class*="card"], li[class*="listing"], article, '
+        'div[data-testid*="listing"], div[class*="property"]'
     )
     
     for container in possible_containers:
@@ -203,13 +263,13 @@ async def extract_listings_by_structure(page):
             text = await container.inner_text()
             
             # Skip if too short or doesn't look like a property listing
-            if len(text) < 50 or not any(keyword in text for keyword in ['RM', 'sq.ft', 'Bedroom']):
+            if len(text) < 50 or not any(keyword in text for keyword in ['RM', 'sq.ft', 'Bedroom', 'bedroom']):
                 continue
             
             listing = {
                 'title': 'Property',
                 'price': 'Price not listed',
-                'location': 'Penang',
+                'location': 'Penang',  # Default
                 'size': '',
                 'bedrooms': '',
                 'bathrooms': '',
@@ -217,40 +277,52 @@ async def extract_listings_by_structure(page):
                 'link': ''
             }
             
-            # Extract title (look for property type)
-            for prop_type in ['Apartment', 'Condominium', 'House', 'Room', 'Studio']:
-                if prop_type in text:
-                    listing['title'] = prop_type
+            # Extract title (look for property type or get first line)
+            lines = text.split('\n')
+            for line in lines[:5]:  # Check first few lines for title
+                for prop_type in ['Apartment', 'Condominium', 'House', 'Room', 'Studio', 'Condo']:
+                    if prop_type in line:
+                        listing['title'] = line.strip()
+                        break
+                if listing['title'] != 'Property':
                     break
-
+            
+            if listing['title'] == 'Property' and lines:
+                listing['title'] = lines[0].strip()
+            
             # Extract price
-            price_match = re.search(r'RM\s*([\d,]+(?:\s*-\s*[\d,]+)?)\s*(?:per\s*month)?', text)
+            price_match = re.search(r'RM\s*([\d,]+(?:\s*-\s*[\d,]+)?)\s*(?:per\s*month)?', text, re.IGNORECASE)
             if price_match:
                 listing['price'] = f"RM {price_match.group(1)}/month"
             
             # Extract size
-            size_match = re.search(r'(\d+(?:\.\d+)?)\s*sq\.?ft', text)
+            size_match = re.search(r'(\d+(?:\.\d+)?)\s*sq\.?ft', text, re.IGNORECASE)
             if size_match:
                 listing['size'] = f"{size_match.group(1)} sq.ft"
             
             # Extract bedrooms
-            bedroom_match = re.search(r'(\d+)\s*Bedrooms?', text)
+            bedroom_match = re.search(r'(\d+)\s*Bedrooms?', text, re.IGNORECASE)
             if bedroom_match:
                 listing['bedrooms'] = f"{bedroom_match.group(1)} beds"
             
             # Extract bathrooms  
-            bath_match = re.search(r'(\d+)\s*Bathrooms?', text)
+            bath_match = re.search(r'(\d+)\s*Bathrooms?', text, re.IGNORECASE)
             if bath_match:
                 listing['bathrooms'] = f"{bath_match.group(1)} baths"
             
-            # Extract location
-            for location in penang_locations:
-                if location in text:
-                    listing['location'] = location
-                    break
+            # IMPROVED: Extract location using enhanced function
+            extracted_location = await extract_location_from_text(text)
+            if extracted_location:
+                listing['location'] = extracted_location
+            else:
+                # Try to find location in the text
+                for location in penang_locations:
+                    if location.lower() in text.lower():
+                        listing['location'] = location
+                        break
             
             # Extract posted time
-            time_match = re.search(r'(Yesterday|Today|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[\s,0-9:]+', text)
+            time_match = re.search(r'(Yesterday|Today|Just now|\d+ hours ago|\d+ days ago|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[\s,0-9:]+', text, re.IGNORECASE)
             if time_match:
                 listing['posted_time'] = time_match.group(0).strip()
             
@@ -261,12 +333,12 @@ async def extract_listings_by_structure(page):
                 if link:
                     listing['link'] = f"https://www.mudah.my{link}" if link.startswith('/') else link
             
-            # FIXED: Removed the broken locator line - just use the location we already extracted
-            # Apply island filter - REMOVED the incorrect listing.locator() call
+            # Apply island filter
             if is_on_island(listing['location']):
                 listings.append(listing)
+                await log(f"  ✓ Added structure listing: {listing['title'][:50]}... at {listing['location']}")
             else:
-                await log(f"  Skipping Mainland property: {listing['location']}")
+                await log(f"  ✗ Skipping Mainland property: {listing['location']}")
             
             if len(listings) >= MAX_RESULTS:
                 break
