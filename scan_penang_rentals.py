@@ -9,6 +9,7 @@ import json
 import os
 import sys
 import re
+import argparse  # ADDED: For command line arguments
 from datetime import datetime
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
 
@@ -18,8 +19,24 @@ SKILL_DIR = os.path.dirname(os.path.abspath(__file__))
 # Configuration
 OUTPUT_FILE = os.path.join(SKILL_DIR, "memory/penang_rentals_{}.json".format(datetime.now().strftime("%Y-%m-%d")))
 LOG_FILE = os.path.join(SKILL_DIR, "memory/rental_scan_log.txt")
-SCAN_URL = "https://www.mudah.my/penang/property-for-rent"
+DEFAULT_SCAN_URL = "https://www.mudah.my/penang/property-for-rent"  # RENAMED: Added DEFAULT_ prefix
 MAX_RESULTS = 30
+
+# ADDED: Location-specific URLs (Penang Island only)
+LOCATION_URLS = {
+    'georgetown': 'https://www.mudah.my/penang-georgetown/property-for-rent',
+    'bayan-lepas': 'https://www.mudah.my/penang-bayan-lepas/property-for-rent',
+    'bayan-baru': 'https://www.mudah.my/penang-bayan-baru/property-for-rent',
+    'sungai-ara': 'https://www.mudah.my/penang-sungai-ara/property-for-rent',
+    'bukit-jambul': 'https://www.mudah.my/penang-bukit-jambul/property-for-rent',
+    'gelugor': 'https://www.mudah.my/penang-gelugor/property-for-rent',
+    'tanjung-bungah': 'https://www.mudah.my/penang-tanjung-bungah/property-for-rent',
+    'tanjung-tokong': 'https://www.mudah.my/penang-tanjung-tokong/property-for-rent',
+    'batu-ferringhi': 'https://www.mudah.my/penang-batu-ferringhi/property-for-rent',
+    'jelutong': 'https://www.mudah.my/penang-jelutong/property-for-rent',
+    'air-itam': 'https://www.mudah.my/penang-air-itam/property-for-rent',
+    'pulau-tikus': 'https://www.mudah.my/penang-pulau-tikus/property-for-rent'
+}
 
 mainland_blacklist = [
     "Batu Kawan", "Bukit Mertajam", "Butterworth", "Simpang Ampat", 
@@ -37,6 +54,31 @@ penang_locations = [
     'Batu Ferringhi', 'Gelugor', 'Pulau Tikus',
     'Air Itam', 'Balik Pulau', 'Batu Uban'
 ]
+
+# Parse command line arguments
+def parse_arguments():
+    """Parse command line arguments."""
+    parser = argparse.ArgumentParser(description='Scan Penang rental properties')
+    parser.add_argument('--location', type=str, help='Specific location to scan (e.g., georgetown, bayan-lepas)')
+    return parser.parse_args()
+
+# Get scan URL based on location argument
+def get_scan_url(location=None):
+    """Determine which URL to scan based on location argument."""
+    if location:
+        location_key = location.lower().replace(' ', '-')
+        if location_key in LOCATION_URLS:
+            return LOCATION_URLS[location_key]
+        else:
+            # Try fuzzy matching
+            for key in LOCATION_URLS:
+                if key in location_key or location_key in key:
+                    print(f"📍 Using URL for: {key}")
+                    return LOCATION_URLS[key]
+            print(f"⚠️ Unknown location '{location}', using default URL")
+            return DEFAULT_SCAN_URL
+    
+    return DEFAULT_SCAN_URL
 
 async def log(message):
     """Log messages with timestamp."""
@@ -236,7 +278,14 @@ async def extract_listings_by_structure(page):
 
 async def scan_mudah():
     """Main scanning function."""
+    # ADDED: Parse arguments at the start
+    args = parse_arguments()
+    
+    # ADDED: Get URL based on location argument
+    scan_url = get_scan_url(args.location)
+    
     await log("Starting Mudah.my Penang rental scan...")
+    await log(f"📍 Target URL: {scan_url}")  # ADDED: Log which URL we're using
     
     async with async_playwright() as p:
         browser = await p.chromium.launch(
@@ -252,8 +301,9 @@ async def scan_mudah():
         page = await context.new_page()
         
         try:
-            await log(f"Navigating to {SCAN_URL}")
-            await page.goto(SCAN_URL, timeout=30000, wait_until="domcontentloaded")
+            # CHANGED: Use scan_url instead of SCAN_URL
+            await log(f"Navigating to {scan_url}")
+            await page.goto(scan_url, timeout=30000, wait_until="domcontentloaded")
             
             # Wait for content
             await asyncio.sleep(5)
@@ -311,6 +361,7 @@ async def scan_mudah():
                 text_file = OUTPUT_FILE.replace('.json', '.txt')
                 with open(text_file, 'w', encoding='utf-8') as f:
                     f.write(f"Penang Rental Properties - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+                    f.write(f"URL: {scan_url}\n")  # ADDED: Include URL in text output
                     f.write("="*70 + "\n\n")
                     for i, listing in enumerate(listings, 1):
                         f.write(f"{i}. {listing['title']}\n")
